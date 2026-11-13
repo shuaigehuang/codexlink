@@ -159,7 +159,7 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
       if (mounted) {
         showMessage(
           context,
-          sent?.status == 'queued'
+          sent.status == 'queued'
               ? '指令已加入电脑端会话队列，将在当前任务结束后继续执行'
               : '指令已发送到当前会话，正在等待 Codex 回复',
         );

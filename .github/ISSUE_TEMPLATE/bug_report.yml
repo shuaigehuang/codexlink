@@ -25,7 +25,7 @@ body:
     attributes:
       label: 版本
       description: Release 标签、APK versionName 或提交 SHA
-      placeholder: v1.0.5
+      placeholder: v1.0.6
     validations:
       required: true
   - type: textarea
