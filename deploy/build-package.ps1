@@ -52,6 +52,9 @@ CodexLink relay package
    Or, with a filed domain and HTTPS:
    sudo bash ./install.sh --domain relay.example.com --email you@example.com
 
+   Or, plaintext HTTP on both 80 and 443 without a certificate:
+   sudo bash ./install.sh --http-dual YOUR_SERVER_IP
+
 3. Copy the relay URL and desktop token printed by the installer into
    CodexLink Desktop -> Devices -> Cloud Relay.
 
@@ -59,6 +62,8 @@ The installer creates a hardened systemd service.
 --http-public uses plaintext HTTP/WS on TCP 80. This is convenient for a
 quick self-hosted test, but the desktop token and conversation traffic are
 not encrypted. Use a filed domain with --domain for production HTTPS.
+--http-dual also uses plaintext HTTP/WS, on both TCP 80 and TCP 443.
+Port 443 in this mode is NOT HTTPS and provides no encryption.
 TCP 80 or 443 must be allowed in the Tencent Cloud security group.
 "@ | Set-Content -LiteralPath (Join-Path $resolvedStage "README.txt") -Encoding utf8
 

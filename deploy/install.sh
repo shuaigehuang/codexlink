@@ -12,9 +12,13 @@ PUBLIC_HOST=""
 HTTP_ONLY=0
 HTTP_PUBLIC=0
 HTTP_PUBLIC_EXPLICIT=0
+HTTP_DUAL=0
 ASSUME_YES=0
 TOKEN="${CODEXLINK_DESKTOP_TOKEN:-}"
 TOKEN_GENERATED=0
+ADMIN_TOKEN="${CODEXLINK_ADMIN_TOKEN:-}"
+ADMIN_TOKEN_GENERATED=0
+PUBLIC_URLS=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -29,12 +33,15 @@ usage() {
   --email <邮箱>    Let's Encrypt 通知邮箱，可选
   --http-public <公网IP或域名>
                     直接监听 80 端口提供 HTTP/WS 服务，不加密
+  --http-dual <公网IP或域名>
+                    直接在 80 和 443 端口提供 HTTP/WS 服务，不申请证书
   --http-only       仅监听 127.0.0.1:8787，供 Nginx/Caddy/SSH 隧道反代
   --yes             不询问，直接安装
   -h, --help        显示帮助
 
 环境变量:
   CODEXLINK_DESKTOP_TOKEN  指定电脑端密钥；留空则自动生成
+  CODEXLINK_ADMIN_TOKEN    指定中继管理密码；留空则自动生成
 EOF
 }
 
@@ -51,11 +58,21 @@ while [[ $# -gt 0 ]]; do
         --http-public)
             PUBLIC_HOST="${2:-}"
             HTTP_PUBLIC=1
+            HTTP_DUAL=0
+            HTTP_PUBLIC_EXPLICIT=1
+            shift 2
+            ;;
+        --http-dual)
+            PUBLIC_HOST="${2:-}"
+            HTTP_PUBLIC=0
+            HTTP_DUAL=1
             HTTP_PUBLIC_EXPLICIT=1
             shift 2
             ;;
         --http-only)
             HTTP_ONLY=1
+            HTTP_PUBLIC=0
+            HTTP_DUAL=0
             shift
             ;;
         --yes|-y)
@@ -110,6 +127,10 @@ if [[ -z "$DOMAIN" && -z "$PUBLIC_HOST" && "$HTTP_ONLY" -eq 0 ]]; then
         read -r -p "中继域名或公网 IP（留空则使用 127.0.0.1:8787 本机模式）: " PUBLIC_HOST
     fi
 fi
+if [[ "$HTTP_PUBLIC_EXPLICIT" -eq 1 && -z "$PUBLIC_HOST" ]]; then
+    echo "--http-public 或 --http-dual 需要提供公网 IP 或域名。" >&2
+    exit 1
+fi
 if [[ -n "$PUBLIC_HOST" && "$HTTP_PUBLIC_EXPLICIT" -eq 0 && ! "$PUBLIC_HOST" =~ ^[0-9.]+$ ]]; then
     DOMAIN="$PUBLIC_HOST"
     PUBLIC_HOST=""
@@ -126,6 +147,7 @@ if [[ -n "$DOMAIN" ]]; then
     fi
     HTTP_ONLY=0
     HTTP_PUBLIC=0
+    HTTP_DUAL=0
 elif [[ -n "$PUBLIC_HOST" ]]; then
     PUBLIC_HOST="${PUBLIC_HOST#http://}"
     PUBLIC_HOST="${PUBLIC_HOST#https://}"
@@ -135,13 +157,20 @@ elif [[ -n "$PUBLIC_HOST" ]]; then
         exit 1
     fi
     HTTP_ONLY=0
-    HTTP_PUBLIC=1
+    if [[ "$HTTP_DUAL" -eq 1 ]]; then
+        HTTP_PUBLIC=0
+    else
+        HTTP_PUBLIC=1
+    fi
 else
     HTTP_ONLY=1
 fi
 
 if [[ -f "$ENV_FILE" && -z "$TOKEN" ]]; then
     TOKEN="$(grep -E '^CODEXLINK_RELAY_DESKTOP_TOKEN=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+fi
+if [[ -f "$ENV_FILE" && -z "$ADMIN_TOKEN" ]]; then
+    ADMIN_TOKEN="$(grep -E '^CODEXLINK_RELAY_ADMIN_TOKEN=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
 fi
 if [[ -z "$TOKEN" ]]; then
     if command -v openssl >/dev/null 2>&1; then
@@ -153,6 +182,18 @@ if [[ -z "$TOKEN" ]]; then
 fi
 if [[ ${#TOKEN} -lt 32 ]]; then
     echo "电脑端密钥至少需要 32 个字符。" >&2
+    exit 1
+fi
+if [[ -z "$ADMIN_TOKEN" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+        ADMIN_TOKEN="$(openssl rand -hex 32)"
+    else
+        ADMIN_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    fi
+    ADMIN_TOKEN_GENERATED=1
+fi
+if [[ ${#ADMIN_TOKEN} -lt 32 ]]; then
+    echo "中继管理密码至少需要 32 个字符。" >&2
     exit 1
 fi
 
@@ -173,10 +214,18 @@ umask 077
     if [[ "$HTTP_ONLY" -eq 1 ]]; then
         echo "CODEXLINK_RELAY_LISTEN=127.0.0.1:8787"
         echo "CODEXLINK_RELAY_TRUST_PROXY=1"
+        PUBLIC_URLS="http://127.0.0.1:8787"
     elif [[ "$HTTP_PUBLIC" -eq 1 ]]; then
         echo "CODEXLINK_RELAY_LISTEN=:80"
         echo "CODEXLINK_RELAY_ORIGINS=${PUBLIC_HOST}"
         echo "CODEXLINK_RELAY_TRUST_PROXY=0"
+        PUBLIC_URLS="http://${PUBLIC_HOST}"
+    elif [[ "$HTTP_DUAL" -eq 1 ]]; then
+        echo "CODEXLINK_RELAY_LISTEN=:80"
+        echo "CODEXLINK_RELAY_EXTRA_HTTP_ADDR=:443"
+        echo "CODEXLINK_RELAY_ORIGINS=${PUBLIC_HOST}"
+        echo "CODEXLINK_RELAY_TRUST_PROXY=0"
+        PUBLIC_URLS="http://${PUBLIC_HOST},http://${PUBLIC_HOST}:443"
     else
         echo "CODEXLINK_RELAY_LISTEN=:443"
         echo "CODEXLINK_RELAY_TLS_DOMAIN=${DOMAIN}"
@@ -184,7 +233,10 @@ umask 077
         echo "CODEXLINK_RELAY_HTTP_ADDR=:80"
         echo "CODEXLINK_RELAY_ORIGINS=${DOMAIN}"
         echo "CODEXLINK_RELAY_TRUST_PROXY=0"
+        PUBLIC_URLS="https://${DOMAIN},http://${DOMAIN}"
     fi
+    echo "CODEXLINK_RELAY_ADMIN_TOKEN=${ADMIN_TOKEN}"
+    echo "CODEXLINK_RELAY_PUBLIC_URLS=${PUBLIC_URLS}"
 } > "$ENV_FILE"
 chmod 0600 "$ENV_FILE"
 chown root:root "$ENV_FILE"
@@ -255,9 +307,19 @@ elif [[ "$HTTP_PUBLIC" -eq 1 ]]; then
     echo "模式: HTTP 明文直连（未启用 TLS）"
     echo "警告: 电脑端密钥、对话内容和远程指令可能被公网中间人截获。"
     echo "正式使用强烈建议准备已备案域名，并改用 --domain 重新安装以启用 HTTPS。"
+elif [[ "$HTTP_DUAL" -eq 1 ]]; then
+    RELAY_URL="http://${PUBLIC_HOST}"
+    echo "公网地址: ${RELAY_URL}"
+    echo "443 地址: http://${PUBLIC_HOST}:443"
+    echo "模式: 80/443 HTTP 明文直连（按当前要求未申请 SSL 证书）"
+    echo "警告: 443 端口当前不是 HTTPS。电脑端密钥、管理密码、对话内容和远程指令"
+    echo "      都可能被公网中间人截获，请勿在不可信网络中使用。"
+    echo "正式使用请配置已备案域名，并改用 --domain 重新安装以启用 HTTPS。"
 else
     RELAY_URL="https://${DOMAIN}"
-    echo "公网地址: ${RELAY_URL}"
+    echo "HTTPS 公网地址: ${RELAY_URL}"
+    echo "HTTP 公网地址: http://${DOMAIN}"
+    echo "80 和 443 都会提供完整中继与管理后台；80 端口为明文，存在被监听风险。"
     echo "请确认腾讯云安全组已放行 TCP 80 和 443。首次签发证书可能需要几十秒。"
     echo "若域名未备案，腾讯云可能拦截证书校验；此时可临时使用 --http-public 公网IP。"
 fi
@@ -275,6 +337,14 @@ for attempt in 1 2 3 4 5 6; do
     sleep 5
 done
 
+if [[ "$HTTP_DUAL" -eq 1 ]]; then
+    if curl -fsS --max-time 8 "http://${PUBLIC_HOST}:443/healthz" >/dev/null 2>&1; then
+        echo "443 端口健康检查: 通过"
+    else
+        echo "443 端口健康检查: 未通过，请确认腾讯云安全组已放行 TCP 443"
+    fi
+fi
+
 echo
 echo "电脑端“设备配对”页填写："
 echo "  中继地址: ${RELAY_URL}"
@@ -284,6 +354,11 @@ if [[ "$TOKEN_GENERATED" -eq 1 ]]; then
 else
     echo "  电脑端密钥: 已沿用现有配置（保存在 ${ENV_FILE}）"
 fi
+echo
+echo "服务器管理后台:"
+echo "  ${RELAY_URL}/admin"
+echo "  管理密码保存在 ${ENV_FILE}"
+echo "  查看命令: sudo grep '^CODEXLINK_RELAY_ADMIN_TOKEN=' ${ENV_FILE}"
 echo
 echo "常用命令："
 echo "  systemctl status codexlink-relay"

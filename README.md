@@ -11,11 +11,12 @@ CodexLink 由三部分组成：Windows 电脑端、Android 手机端，以及部
 
 ## 功能
 
-- **远程下达指令**：手机可以在电脑已有会话中继续对话，不会另开新会话。
+- **远程下达指令**：手机可以在电脑已有会话中继续对话；电脑正在执行任务时，指令会排队并使用同一会话继续，不会另开新会话或中断当前任务。
 - **查看历史会话**：读取电脑上 Codex 的真实会话、轮次、消息和命令记录。
 - **Magpie 管理**：查看 Provider、余额、网关密钥，创建/轮换/启停/删除密钥。
 - **一次性扫码配对**：电脑端生成 8 位配对码和二维码，10 分钟内有效且只能领取一次。
 - **手机令牌管理**：电脑端可查看在线状态、授权时间、到期时间，并单个或全部撤销。
+- **服务器管理后台**：在服务器网页中增删电脑端接入令牌、查看在线设备与可用连接地址。
 - **自动重连**：电脑端关闭窗口后默认隐藏到系统托盘，保持与中继的连接。
 - **本地密钥保护**：电脑端配置使用 Windows DPAPI 加密；手机令牌保存在系统安全存储。
 - **命令输出折叠**：手机端默认折叠长命令输出，只显示可展开的命令摘要。
@@ -47,6 +48,8 @@ sudo bash ./install.sh --domain relay.example.com --email you@example.com
 ```
 
 安装完成后保存终端输出的**中继地址**和**电脑端密钥**。密钥只显示一次。
+安装脚本还会生成服务器管理密码，保存在 `/etc/codexlink-relay.env`；打开
+`https://relay.example.com/admin` 即可进入管理后台。
 
 没有域名时可以临时使用公网 IP：
 
@@ -55,6 +58,15 @@ sudo bash ./install.sh --http-public YOUR_SERVER_IP
 ```
 
 该模式使用明文 HTTP/WS，仅建议临时测试。正式使用请改用 `--domain` 启用自动 HTTPS。
+
+如果暂时不申请 SSL 证书，但需要同时开放 80 和 443：
+
+```bash
+sudo bash ./install.sh --http-dual YOUR_SERVER_IP
+```
+
+该模式下 `http://YOUR_SERVER_IP` 和 `http://YOUR_SERVER_IP:443` 都是明文 HTTP，
+`443` **不是 HTTPS**。管理密码、电脑端令牌和对话内容都可能被中间人截获，仅适合临时使用。
 
 ### 2. 启动电脑端
 
@@ -158,8 +170,11 @@ pwsh ./deploy/build-package.ps1 -Arch all
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `CODEXLINK_RELAY_DESKTOP_TOKEN` | 无 | 电脑端密钥，至少 32 字符，必填 |
+| `CODEXLINK_RELAY_ADMIN_TOKEN` | 空 | 服务器管理后台密码，至少 32 字符；为空时关闭管理后台 |
+| `CODEXLINK_RELAY_PUBLIC_URLS` | 空 | 管理后台展示的公开地址，逗号分隔 |
 | `CODEXLINK_RELAY_DATA_DIR` | `./data` | 会话和证书缓存目录 |
 | `CODEXLINK_RELAY_LISTEN` | `127.0.0.1:8787` | 监听地址 |
+| `CODEXLINK_RELAY_EXTRA_HTTP_ADDR` | 空 | 额外明文 HTTP 监听地址，例如 `:443` |
 | `CODEXLINK_RELAY_PAIR_TTL` | `10m` | 配对码有效期 |
 | `CODEXLINK_RELAY_SESSION_TTL` | `2160h` | 手机令牌有效期，默认 90 天 |
 | `CODEXLINK_RELAY_TRUST_PROXY` | `false` | 是否信任 `X-Forwarded-For` |
@@ -177,9 +192,30 @@ sudo bash ./install.sh --domain relay.example.com --email you@example.com
 # 公网 IP 明文 HTTP，仅测试
 sudo bash ./install.sh --http-public YOUR_SERVER_IP
 
+# 80 和 443 都提供明文 HTTP，不申请 SSL 证书
+sudo bash ./install.sh --http-dual YOUR_SERVER_IP
+
 # 只监听 127.0.0.1:8787，交给 Nginx/Caddy 反代
 sudo bash ./install.sh --http-only
 ```
+
+## 服务器管理后台
+
+安装时脚本会生成独立的管理密码。打开：
+
+```text
+https://relay.example.com/admin
+```
+
+后台支持：
+
+- 查看中继是否在线、当前在线电脑端和手机数量。
+- 查看并复制可用的服务器连接地址，以及每个地址是否加密。
+- 生成新的电脑端接入令牌。完整令牌只显示一次，服务器只保存哈希。
+- 删除电脑端令牌。删除在线令牌会立即断开对应电脑端，至少保留一个令牌防止失联。
+
+管理后台管理的是**电脑端接入令牌**；手机授权令牌仍由电脑端“已授权手机”面板管理。
+管理会话默认 12 小时有效，并带有 CSRF 防护和登录失败限速。
 
 服务管理：
 
@@ -202,14 +238,21 @@ curl https://relay.example.com/healthz
 | `POST /v1/pair/claim` | 手机领取一次性配对码 |
 | `GET /v1/mobile/connect` | 手机 WebSocket RPC 通道 |
 | `POST /v1/mobile/rpc` | 手机 HTTP RPC 通道 |
+| `GET /admin` | 服务器管理后台登录页 |
+| `POST /admin/login` | 管理员登录 |
+| `GET /admin/api/state` | 令牌、在线设备和公开地址状态 |
+| `POST /admin/api/tokens` | 生成电脑端令牌 |
+| `DELETE /admin/api/tokens/{id}` | 删除电脑端令牌 |
 
 手机只能调用中继白名单中的方法，包括 `ping`、`node.status`、`threads.list`、`threads.read`、`threads.send`、`magpie.status` 和 Magpie 管理方法。
 
 - 中继只持久化手机令牌的 SHA-256 哈希，不保存令牌原文。
+- 电脑端令牌只保存 SHA-256 哈希，完整值仅在创建时显示一次。
 - 电脑端密钥只保存在电脑本地，使用 Windows DPAPI 加密。
 - 手机令牌只保存在 Android 安全存储。
 - Magpie Provider Key 和网关密钥不会写入日志；完整密钥只在创建或轮换时返回一次。
 - HTTP 模式不具备机密性和完整性保护，请勿在公共 Wi-Fi 下使用。
+- `--http-dual` 的 443 端口仍是 HTTP 明文，不是 HTTPS；不要因为端口号是 443 就认为连接已加密。
 
 漏洞报告方式见 [SECURITY.md](SECURITY.md)。请不要在公开 Issue 中粘贴密钥、令牌、服务器地址或完整日志。
 

@@ -3,6 +3,8 @@ package codex
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -180,6 +182,9 @@ func (c *Client) Initialize(ctx context.Context) (InitializeResponse, error) {
 			Title:   "CodexLink",
 			Version: "1.0.5",
 		},
+		Capabilities: InitializeCapabilities{
+			ExperimentalAPI: true,
+		},
 	}, &response)
 	if err != nil {
 		return response, err
@@ -264,18 +269,32 @@ func (c *Client) writeJSON(value any) error {
 }
 
 func (c *Client) readLoop(stdout io.Reader) {
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 32*1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	for {
+		line, readErr := reader.ReadBytes('\n')
 		if len(strings.TrimSpace(string(line))) == 0 {
-			continue
+			if readErr == nil {
+				continue
+			}
+			if readErr == io.EOF {
+				c.failAll(io.EOF)
+				return
+			}
+			c.failAll(fmt.Errorf("read app-server output: %w", readErr))
+			return
 		}
 
 		var message wireMessage
 		if err := json.Unmarshal(line, &message); err != nil {
-			continue
+			if readErr == nil {
+				continue
+			}
+			if readErr == io.EOF {
+				c.failAll(io.EOF)
+				return
+			}
+			c.failAll(fmt.Errorf("read app-server output: %w", readErr))
+			return
 		}
 
 		if message.Method != "" {
@@ -283,34 +302,32 @@ func (c *Client) readLoop(stdout io.Reader) {
 				Method: message.Method,
 				Params: message.Params,
 			})
-			continue
-		}
-
-		id, err := parseMessageID(message.ID)
-		if err != nil {
-			continue
-		}
-
-		c.mu.Lock()
-		ch := c.pending[id]
-		delete(c.pending, id)
-		c.mu.Unlock()
-		if ch == nil {
-			continue
-		}
-
-		if message.Error != nil {
-			ch <- callResult{err: message.Error}
 		} else {
-			ch <- callResult{result: message.Result}
+			id, err := parseMessageID(message.ID)
+			if err == nil {
+				c.mu.Lock()
+				ch := c.pending[id]
+				delete(c.pending, id)
+				c.mu.Unlock()
+				if ch != nil {
+					if message.Error != nil {
+						ch <- callResult{err: message.Error}
+					} else {
+						ch <- callResult{result: message.Result}
+					}
+				}
+			}
+		}
+
+		if readErr == io.EOF {
+			c.failAll(io.EOF)
+			return
+		}
+		if readErr != nil {
+			c.failAll(fmt.Errorf("read app-server output: %w", readErr))
+			return
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		c.failAll(fmt.Errorf("read app-server output: %w", err))
-		return
-	}
-	c.failAll(io.EOF)
 }
 
 func (c *Client) waitLoop() {
@@ -478,8 +495,37 @@ func (c *Client) StartTurn(ctx context.Context, params TurnStartParams) (TurnSta
 	return response, err
 }
 
+func (c *Client) QueueThreadInput(ctx context.Context, threadID, text string) (QueuedSubmission, error) {
+	var response ThreadQueueAddResponse
+	err := c.Call(ctx, "thread/queue/add", ThreadQueueAddParams{
+		ThreadID:            threadID,
+		ClientUserMessageID: newClientMessageID(),
+		Input: []UserInput{
+			{Type: "text", Text: text},
+		},
+	}, &response)
+	return response.QueuedSubmission, err
+}
+
+func (c *Client) DeleteQueuedInput(ctx context.Context, threadID, queuedSubmissionID string) (bool, error) {
+	var response ThreadQueueDeleteResponse
+	err := c.Call(ctx, "thread/queue/delete", ThreadQueueDeleteParams{
+		ThreadID:           threadID,
+		QueuedSubmissionID: queuedSubmissionID,
+	}, &response)
+	return response.Deleted, err
+}
+
 func (c *Client) InterruptTurn(ctx context.Context, params InterruptTurnParams) error {
 	return c.Call(ctx, "turn/interrupt", params, nil)
+}
+
+func newClientMessageID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return hex.EncodeToString(value[:])
 }
 
 func (c *Client) WaitForTurnCompleted(ctx context.Context, threadID, turnID string) (TurnCompletedParams, error) {

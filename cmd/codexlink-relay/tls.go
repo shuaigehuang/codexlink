@@ -12,16 +12,18 @@ import (
 )
 
 type tlsOptions struct {
-	Domain   string
-	Email    string
-	HTTPAddr string
+	Domain        string
+	Email         string
+	HTTPAddr      string
+	ExtraHTTPAddr string
 }
 
 func loadTLSOptions(getenv func(string) string) tlsOptions {
 	options := tlsOptions{
-		Domain:   strings.ToLower(strings.TrimSpace(getenv("CODEXLINK_RELAY_TLS_DOMAIN"))),
-		Email:    strings.TrimSpace(getenv("CODEXLINK_RELAY_TLS_EMAIL")),
-		HTTPAddr: strings.TrimSpace(getenv("CODEXLINK_RELAY_HTTP_ADDR")),
+		Domain:        strings.ToLower(strings.TrimSpace(getenv("CODEXLINK_RELAY_TLS_DOMAIN"))),
+		Email:         strings.TrimSpace(getenv("CODEXLINK_RELAY_TLS_EMAIL")),
+		HTTPAddr:      strings.TrimSpace(getenv("CODEXLINK_RELAY_HTTP_ADDR")),
+		ExtraHTTPAddr: strings.TrimSpace(getenv("CODEXLINK_RELAY_EXTRA_HTTP_ADDR")),
 	}
 	if options.Domain != "" && options.HTTPAddr == "" {
 		options.HTTPAddr = ":80"
@@ -42,15 +44,7 @@ func newAutocertManager(options tlsOptions, dataDir string) (*autocert.Manager, 
 	return manager, config
 }
 
-func redirectToHTTPS(manager *autocert.Manager, domain string) http.Handler {
-	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		target := "https://" + domain + r.URL.RequestURI()
-		http.Redirect(w, r, target, http.StatusPermanentRedirect)
-	})
-	return manager.HTTPHandler(fallback)
-}
-
-func serveHTTPRedirect(server *http.Server, logger *log.Logger) {
+func servePlainHTTP(server *http.Server, logger *log.Logger) {
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Printf("HTTP redirect listener unavailable on %s: %v", server.Addr, err)

@@ -16,6 +16,10 @@ type InitializeParams struct {
 	Capabilities any        `json:"capabilities,omitempty"`
 }
 
+type InitializeCapabilities struct {
+	ExperimentalAPI bool `json:"experimentalApi,omitempty"`
+}
+
 type InitializeResponse struct {
 	UserAgent      string `json:"userAgent"`
 	CodexHome      string `json:"codexHome"`
@@ -137,6 +141,31 @@ type TurnStartParams struct {
 
 type TurnStartResponse struct {
 	Turn Turn `json:"turn"`
+}
+
+type ThreadQueueAddParams struct {
+	ThreadID            string      `json:"threadId"`
+	ClientUserMessageID string      `json:"clientUserMessageId"`
+	Input               []UserInput `json:"input"`
+}
+
+type QueuedSubmission struct {
+	ID                  string      `json:"id"`
+	ClientUserMessageID string      `json:"clientUserMessageId"`
+	Input               []UserInput `json:"input"`
+}
+
+type ThreadQueueAddResponse struct {
+	QueuedSubmission QueuedSubmission `json:"queuedSubmission"`
+}
+
+type ThreadQueueDeleteParams struct {
+	ThreadID           string `json:"threadId"`
+	QueuedSubmissionID string `json:"queuedSubmissionId"`
+}
+
+type ThreadQueueDeleteResponse struct {
+	Deleted bool `json:"deleted"`
 }
 
 type InterruptTurnParams struct {

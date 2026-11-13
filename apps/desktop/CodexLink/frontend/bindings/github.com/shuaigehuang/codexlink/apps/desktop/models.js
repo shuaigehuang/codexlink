@@ -1058,6 +1058,13 @@ export class SendResult {
              */
             this["turnId"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["queueId"] = undefined;
+        }
         if (!("status" in $$source)) {
             /**
              * @member

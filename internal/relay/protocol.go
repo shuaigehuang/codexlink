@@ -13,6 +13,7 @@ const (
 	PathMobileConnect    = "/v1/mobile/connect"
 	PathMobileRPC        = "/v1/mobile/rpc"
 	PathPairClaim        = "/v1/pair/claim"
+	PathAdmin            = "/admin"
 	MessageTypeHello     = "hello"
 	MessageTypeError     = "error"
 	MessageTypePair      = "pair.create"

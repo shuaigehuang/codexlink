@@ -137,9 +137,10 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
     var waitNoticeShown = false;
     try {
       var attempt = 0;
+      SendResult? sent;
       while (true) {
         try {
-          await widget.controller.sendMessage(widget.thread.id, text);
+          sent = await widget.controller.sendMessage(widget.thread.id, text);
           break;
         } catch (exception) {
           final busy = exception.toString().contains('thread_busy');
@@ -156,7 +157,12 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
       }
       _composer.clear();
       if (mounted) {
-        showMessage(context, '指令已发送到当前会话，正在等待 Codex 回复');
+        showMessage(
+          context,
+          sent?.status == 'queued'
+              ? '指令已加入电脑端会话队列，将在当前任务结束后继续执行'
+              : '指令已发送到当前会话，正在等待 Codex 回复',
+        );
       }
       await Future<void>.delayed(const Duration(milliseconds: 2200));
       await _load(scrollToBottom: true);

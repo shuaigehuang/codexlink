@@ -20,11 +20,14 @@ import (
 )
 
 const testDesktopToken = "test-desktop-token-0123456789abcdef"
+const testAdminToken = "test-admin-token-0123456789abcdefgh"
 
 func newTestRelay(t *testing.T, pairTTL, sessionTTL time.Duration) (*Server, *httptest.Server) {
 	t.Helper()
 	server, err := NewServer(Config{
 		DesktopToken: testDesktopToken,
+		AdminToken:   testAdminToken,
+		PublicURLs:   []string{"https://relay.example.com", "http://relay.example.com"},
 		DataDir:      t.TempDir(),
 		PairTTL:      pairTTL,
 		SessionTTL:   sessionTTL,

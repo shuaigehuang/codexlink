@@ -36,6 +36,8 @@ const (
 
 type Config struct {
 	DesktopToken   string
+	AdminToken     string
+	PublicURLs     []string
 	DataDir        string
 	PairTTL        time.Duration
 	SessionTTL     time.Duration
@@ -48,12 +50,15 @@ type Server struct {
 	cfg       Config
 	mux       *http.ServeMux
 	store     *sessionStore
+	tokens    *desktopTokenStore
 	mu        sync.Mutex
 	desktops  map[string]*peer
 	mobiles   map[*peer]struct{}
 	pending   map[string]pendingRoute
 	pairs     map[string]pairRecord
 	attempts  map[string]attemptWindow
+	adminMu   sync.Mutex
+	admins    map[string]adminSession
 	closed    bool
 	closeOnce sync.Once
 }
@@ -65,6 +70,7 @@ type peer struct {
 	name      string
 	sessionID string
 	tokenHash string
+	tokenID   string
 	writeMu   sync.Mutex
 }
 
@@ -92,6 +98,11 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.DesktopToken == "" {
 		return nil, errors.New("desktop token is required")
 	}
+	cfg.AdminToken = strings.TrimSpace(cfg.AdminToken)
+	if cfg.AdminToken != "" && len(cfg.AdminToken) < minDesktopTokenLen {
+		return nil, errors.New("admin token must be at least 32 characters")
+	}
+	cfg.PublicURLs = normalizePublicURLs(cfg.PublicURLs)
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		cfg.DataDir = "data"
 	}
@@ -108,14 +119,20 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load relay sessions: %w", err)
 	}
+	tokens, err := newDesktopTokenStore(cfg.DataDir, cfg.DesktopToken)
+	if err != nil {
+		return nil, fmt.Errorf("load desktop tokens: %w", err)
+	}
 	server := &Server{
 		cfg:      cfg,
 		store:    store,
+		tokens:   tokens,
 		desktops: make(map[string]*peer),
 		mobiles:  make(map[*peer]struct{}),
 		pending:  make(map[string]pendingRoute),
 		pairs:    make(map[string]pairRecord),
 		attempts: make(map[string]attemptWindow),
+		admins:   make(map[string]adminSession),
 	}
 	server.mux = http.NewServeMux()
 	server.mux.HandleFunc(PathHealth, server.handleHealth)
@@ -125,6 +142,12 @@ func NewServer(cfg Config) (*Server, error) {
 	server.mux.HandleFunc(PathMobileConnect, server.handleMobile)
 	server.mux.HandleFunc(PathMobileRPC, server.handleMobileRPC)
 	server.mux.HandleFunc(PathPairClaim, server.handlePairClaim)
+	server.mux.HandleFunc(PathAdmin, server.handleAdmin)
+	server.mux.HandleFunc(PathAdmin+"/login", server.handleAdminLogin)
+	server.mux.HandleFunc(PathAdmin+"/logout", server.handleAdminLogout)
+	server.mux.HandleFunc(PathAdmin+"/api/state", server.handleAdminState)
+	server.mux.HandleFunc(PathAdmin+"/api/tokens", server.handleAdminTokens)
+	server.mux.HandleFunc(PathAdmin+"/api/tokens/", server.handleAdminTokenDelete)
 	return server, nil
 }
 
@@ -177,7 +200,8 @@ func (s *Server) handleDesktop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !secureEqual(bearerToken(r), s.cfg.DesktopToken) {
+	token, ok := s.tokens.Authenticate(bearerToken(r))
+	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -191,9 +215,12 @@ func (s *Server) handleDesktop(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	desktop := &peer{conn: conn, kind: "desktop", deviceID: deviceID, name: name}
+	desktop := &peer{conn: conn, kind: "desktop", deviceID: deviceID, name: name, tokenID: token.ID}
 	s.registerDesktop(desktop)
 	defer s.unregisterDesktop(desktop)
+	if err := s.tokens.MarkUsed(token.ID); err != nil {
+		s.cfg.Logger.Printf("desktop token last-used update failed id=%s err=%v", token.ID, err)
+	}
 	s.cfg.Logger.Printf("desktop connected device=%s name=%q", deviceID, name)
 
 	_ = desktop.send(r.Context(), Message{
@@ -239,7 +266,7 @@ func (s *Server) handleDesktopSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !secureEqual(bearerToken(r), s.cfg.DesktopToken) {
+	if _, ok := s.tokens.Authenticate(bearerToken(r)); !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -271,7 +298,7 @@ func (s *Server) handleDesktopRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !secureEqual(bearerToken(r), s.cfg.DesktopToken) {
+	if _, ok := s.tokens.Authenticate(bearerToken(r)); !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}

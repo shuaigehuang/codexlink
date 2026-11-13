@@ -63,15 +63,27 @@ func main() {
 }
 
 func runServer(service *relay.Server, httpServer *http.Server, certManager *autocert.Manager, tlsOptions tlsOptions, cfg relay.Config, listen string) {
-	var redirectServer *http.Server
+	plainServers := make([]*http.Server, 0, 2)
 	if certManager != nil && tlsOptions.HTTPAddr != "" {
-		redirectServer = &http.Server{
+		auxiliaryServer := &http.Server{
 			Addr:              tlsOptions.HTTPAddr,
-			Handler:           redirectToHTTPS(certManager, tlsOptions.Domain),
+			Handler:           certManager.HTTPHandler(service.Handler()),
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       30 * time.Second,
 		}
-		serveHTTPRedirect(redirectServer, cfg.Logger)
+		servePlainHTTP(auxiliaryServer, cfg.Logger)
+		plainServers = append(plainServers, auxiliaryServer)
+	}
+	if tlsOptions.ExtraHTTPAddr != "" && tlsOptions.ExtraHTTPAddr != listen &&
+		tlsOptions.ExtraHTTPAddr != tlsOptions.HTTPAddr {
+		extraServer := &http.Server{
+			Addr:              tlsOptions.ExtraHTTPAddr,
+			Handler:           service.Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		servePlainHTTP(extraServer, cfg.Logger)
+		plainServers = append(plainServers, extraServer)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -82,8 +94,8 @@ func runServer(service *relay.Server, httpServer *http.Server, certManager *auto
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
-		if redirectServer != nil {
-			_ = redirectServer.Shutdown(shutdownCtx)
+		for _, server := range plainServers {
+			_ = server.Shutdown(shutdownCtx)
 		}
 		service.Close()
 		close(shutdownDone)
@@ -93,6 +105,9 @@ func runServer(service *relay.Server, httpServer *http.Server, certManager *auto
 		cfg.Logger.Printf("relay listening with automatic HTTPS on %s domain=%s data=%s", listen, tlsOptions.Domain, cfg.DataDir)
 	} else {
 		cfg.Logger.Printf("relay listening on %s data=%s", listen, cfg.DataDir)
+	}
+	for _, server := range plainServers {
+		cfg.Logger.Printf("relay also serving plaintext HTTP on %s", server.Addr)
 	}
 	var err error
 	if certManager != nil {
@@ -113,6 +128,10 @@ func loadConfig(getenv func(string) string) (relay.Config, string, error) {
 	token := strings.TrimSpace(getenv("CODEXLINK_RELAY_DESKTOP_TOKEN"))
 	if len(token) < minTokenBytes {
 		return relay.Config{}, "", fmt.Errorf("CODEXLINK_RELAY_DESKTOP_TOKEN 至少需要 %d 个字符", minTokenBytes)
+	}
+	adminToken := strings.TrimSpace(getenv("CODEXLINK_RELAY_ADMIN_TOKEN"))
+	if adminToken != "" && len(adminToken) < minTokenBytes {
+		return relay.Config{}, "", fmt.Errorf("CODEXLINK_RELAY_ADMIN_TOKEN 至少需要 %d 个字符", minTokenBytes)
 	}
 	dataDir := strings.TrimSpace(getenv("CODEXLINK_RELAY_DATA_DIR"))
 	if dataDir == "" {
@@ -136,9 +155,12 @@ func loadConfig(getenv func(string) string) (relay.Config, string, error) {
 		return relay.Config{}, "", err
 	}
 	origins := splitList(getenv("CODEXLINK_RELAY_ORIGINS"))
+	publicURLs := splitList(getenv("CODEXLINK_RELAY_PUBLIC_URLS"))
 
 	return relay.Config{
 		DesktopToken:   token,
+		AdminToken:     adminToken,
+		PublicURLs:     publicURLs,
 		DataDir:        dataDir,
 		PairTTL:        pairTTL,
 		SessionTTL:     sessionTTL,

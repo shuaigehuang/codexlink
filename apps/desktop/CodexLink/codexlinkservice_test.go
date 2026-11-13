@@ -16,6 +16,18 @@ func TestIsActiveWriterError(t *testing.T) {
 	}
 }
 
+func TestIsQueueUnsupportedError(t *testing.T) {
+	if !isQueueUnsupportedError(errors.New("codex rpc error -32601: method not found")) {
+		t.Fatal("expected unsupported queue method to be detected")
+	}
+	if !isQueueUnsupportedError(errors.New("user message queue is unavailable")) {
+		t.Fatal("expected unavailable queue to be detected")
+	}
+	if isQueueUnsupportedError(errors.New("codex rpc error -32600: thread not found")) {
+		t.Fatal("unrelated queue error must not trigger the legacy fallback")
+	}
+}
+
 func TestToThreadItemViewUsesTurnTimestampFallback(t *testing.T) {
 	completedAt := int64(1794468319)
 	view, ok := toThreadItemView(codex.ThreadItem{

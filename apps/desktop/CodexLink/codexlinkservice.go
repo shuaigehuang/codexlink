@@ -197,6 +197,7 @@ type ThreadItemView struct {
 type SendResult struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
+	QueueID  string `json:"queueId,omitempty"`
 	Status   string `json:"status"`
 }
 
@@ -328,7 +329,7 @@ func (s *CodexLinkService) ReadThread(ctx context.Context, threadID string) (Thr
 		ThreadID:      threadID,
 		Limit:         50,
 		SortDirection: "asc",
-		ItemsView:     "full",
+		ItemsView:     "summary",
 	})
 	if err != nil {
 		return ThreadDetail{}, err
@@ -368,13 +369,29 @@ func (s *CodexLinkService) SendMessage(ctx context.Context, threadID string, tex
 		return SendResult{}, err
 	}
 
+	queued, err := s.client.QueueThreadInput(ctx, threadID, text)
+	if err == nil {
+		return SendResult{
+			ThreadID: threadID,
+			QueueID:  queued.ID,
+			Status:   "queued",
+		}, nil
+	}
+	if !isQueueUnsupportedError(err) {
+		return SendResult{}, fmt.Errorf("发送消息失败: %w", err)
+	}
+
+	return s.sendMessageLegacy(ctx, threadID, text)
+}
+
+func (s *CodexLinkService) sendMessageLegacy(ctx context.Context, threadID, text string) (SendResult, error) {
 	if _, err := s.client.ResumeThread(ctx, codex.ThreadResumeParams{
 		ThreadID:       threadID,
 		ExcludeTurns:   true,
 		ApprovalPolicy: "on-request",
 	}); err != nil {
 		if isActiveWriterError(err) {
-			return SendResult{}, errors.New("thread_busy: 电脑端 Codex 正在使用这个会话。请在电脑上切换到其他会话，或等当前回复结束；手机端会自动重试，不会新建会话")
+			return SendResult{}, threadBusyError()
 		}
 		return SendResult{}, fmt.Errorf("恢复会话失败: %w", err)
 	}
@@ -387,6 +404,9 @@ func (s *CodexLinkService) SendMessage(ctx context.Context, threadID string, tex
 		},
 	})
 	if err != nil {
+		if isActiveWriterError(err) {
+			return SendResult{}, threadBusyError()
+		}
 		return SendResult{}, fmt.Errorf("发送消息失败: %w", err)
 	}
 
@@ -395,6 +415,23 @@ func (s *CodexLinkService) SendMessage(ctx context.Context, threadID string, tex
 		TurnID:   turn.Turn.ID,
 		Status:   turn.Turn.Status,
 	}, nil
+}
+
+func isQueueUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "-32601") ||
+		strings.Contains(message, "method not found") ||
+		strings.Contains(message, "unknown method") ||
+		strings.Contains(message, "unknown variant") ||
+		strings.Contains(message, "queue is unavailable") ||
+		strings.Contains(message, "experimental")
+}
+
+func threadBusyError() error {
+	return errors.New("thread_busy: 电脑端 Codex 正在使用这个会话。请在电脑上切换到其他会话，或等当前回复结束；手机端会自动重试，不会新建会话")
 }
 
 func isActiveWriterError(err error) bool {

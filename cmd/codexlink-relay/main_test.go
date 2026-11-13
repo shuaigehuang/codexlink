@@ -32,12 +32,14 @@ func TestLoadConfigRejectsShortToken(t *testing.T) {
 func TestLoadConfigOverrides(t *testing.T) {
 	env := map[string]string{
 		"CODEXLINK_RELAY_DESKTOP_TOKEN": "0123456789abcdef0123456789abcdef",
+		"CODEXLINK_RELAY_ADMIN_TOKEN":   "abcdef0123456789abcdef0123456789",
 		"CODEXLINK_RELAY_DATA_DIR":      "/var/lib/codexlink",
 		"CODEXLINK_RELAY_LISTEN":        "127.0.0.1:9999",
 		"CODEXLINK_RELAY_PAIR_TTL":      "5m",
 		"CODEXLINK_RELAY_SESSION_TTL":   "24h",
 		"CODEXLINK_RELAY_TRUST_PROXY":   "1",
 		"CODEXLINK_RELAY_ORIGINS":       "https://a.example, https://b.example",
+		"CODEXLINK_RELAY_PUBLIC_URLS":   "https://relay.example.com,http://relay.example.com",
 	}
 	cfg, listen, err := loadConfig(func(key string) string { return env[key] })
 	if err != nil {
@@ -51,6 +53,9 @@ func TestLoadConfigOverrides(t *testing.T) {
 	}
 	if len(cfg.AllowedOrigins) != 2 || cfg.AllowedOrigins[1] != "https://b.example" {
 		t.Fatalf("origins not parsed: %v", cfg.AllowedOrigins)
+	}
+	if cfg.AdminToken != env["CODEXLINK_RELAY_ADMIN_TOKEN"] || len(cfg.PublicURLs) != 2 {
+		t.Fatalf("admin or public URLs not parsed: %+v", cfg)
 	}
 }
 
@@ -69,5 +74,15 @@ func TestLoadTLSOptions(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(config.NextProtos, ","), "http/1.1") {
 		t.Fatalf("HTTP/1.1 was not advertised for WebSocket compatibility: %v", config.NextProtos)
+	}
+}
+
+func TestLoadTLSOptionsExtraHTTPAddress(t *testing.T) {
+	env := map[string]string{
+		"CODEXLINK_RELAY_EXTRA_HTTP_ADDR": ":443",
+	}
+	options := loadTLSOptions(func(key string) string { return env[key] })
+	if options.Domain != "" || options.ExtraHTTPAddr != ":443" {
+		t.Fatalf("unexpected plaintext dual-port options: %+v", options)
 	}
 }
