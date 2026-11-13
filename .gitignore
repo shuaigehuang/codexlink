@@ -1,0 +1,56 @@
+# Operating system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Local secrets and runtime data
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+key.properties
+/data/
+sessions.json
+relay.dat
+
+# Toolchains and build caches
+.toolchains/
+.task/
+.wails/
+node_modules/
+**/node_modules/
+**/.dart_tool/
+**/.gradle/
+**/.flutter-plugins-dependencies
+/dist/
+/bin/
+apps/mobile/build/
+
+# Go
+*.exe
+*.exe~
+*.test
+*.out
+*.syso
+coverage.out
+
+# Flutter / Android
+*.apk
+*.aab
+*.log
+local.properties
+GeneratedPluginRegistrant.java
+
+# Archives
+*.tar.gz
+*.zip

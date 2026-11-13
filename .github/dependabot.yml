@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /apps/desktop/CodexLink
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /apps/desktop/CodexLink/frontend
+    schedule:
+      interval: weekly
+  - package-ecosystem: pub
+    directory: /apps/mobile
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

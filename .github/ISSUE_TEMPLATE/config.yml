@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/shuaigehuang/codexlink/security/policy
+    about: 请通过私密渠道报告安全漏洞，不要公开提交
+  - name: Documentation
+    url: https://github.com/shuaigehuang/codexlink#readme
+    about: 先阅读 README 和 docs 目录

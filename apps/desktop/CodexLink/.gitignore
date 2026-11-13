@@ -1,0 +1,7 @@
+.task
+.wails
+bin
+frontend/node_modules
+*.exe
+*.exe~
+*.syso

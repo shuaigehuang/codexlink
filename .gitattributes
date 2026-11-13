@@ -1,0 +1,22 @@
+* text=auto eol=lf
+
+*.go text eol=lf
+*.dart text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.jar binary
+*.gz binary
+*.apk binary
+*.exe binary

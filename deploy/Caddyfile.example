@@ -1,0 +1,6 @@
+# 仅当不使用中继自带 HTTPS 时使用。
+# 将 relay.example.com 换成你的域名，并把 CODEXLINK_RELAY_LISTEN 设为 127.0.0.1:8787。
+relay.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8787
+}

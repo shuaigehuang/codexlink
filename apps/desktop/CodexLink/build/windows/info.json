@@ -1,0 +1,17 @@
+{
+	"fixed": {
+		"file_version": "1.0.5",
+		"product_version": "1.0.5"
+	},
+	"info": {
+		"0409": {
+			"FileVersion": "1.0.5",
+			"ProductVersion": "1.0.5",
+			"CompanyName": "CodexLink",
+			"FileDescription": "Remote Codex and magpie control",
+			"LegalCopyright": "© 2026, CodexLink",
+			"ProductName": "CodexLink",
+			"Comments": "Local Codex and magpie control console"
+		}
+	}
+}

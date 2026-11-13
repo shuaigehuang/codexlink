@@ -1,0 +1,72 @@
+name: Bug report
+description: 报告可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请先删除日志中的服务器地址、电脑端密钥、手机令牌和 Magpie 密钥。
+        安全漏洞请不要公开提交，参见 SECURITY.md。
+  - type: dropdown
+    id: component
+    attributes:
+      label: 组件
+      options:
+        - Windows 电脑端
+        - Android 手机端
+        - Linux 中继
+        - 安装脚本
+        - 文档
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: Release 标签、APK versionName 或提交 SHA
+      placeholder: v1.0.5
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: Windows/Android/Ubuntu 版本，Codex、Magpie、Flutter、Go 版本
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏日志
+      description: 不要粘贴真实密钥、令牌、服务器 IP 或完整对话内容
+      render: text
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我已移除日志中的密钥、令牌、服务器地址和个人信息
+          required: true
