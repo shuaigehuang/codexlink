@@ -1265,6 +1265,13 @@ export class ThreadDetail {
              */
             this["turns"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["latestTimestamp"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -1335,6 +1342,13 @@ export class ThreadItemView {
              * @type {number}
              */
             this["timestamp"] = 0;
+        }
+        if (!("completed" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["completed"] = false;
         }
 
         Object.assign(this, $$source);

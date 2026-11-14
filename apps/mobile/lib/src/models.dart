@@ -353,17 +353,20 @@ class ThreadDetail {
     required this.thread,
     required this.items,
     required this.turns,
+    required this.latestTimestamp,
   });
 
   final ThreadBrief thread;
   final List<ThreadItem> items;
   final int turns;
+  final int latestTimestamp;
 
   factory ThreadDetail.fromJson(Map<String, dynamic> json) {
     return ThreadDetail(
       thread: ThreadBrief.fromJson(_map(json['thread'])),
       items: _mapList(json['items']).map(ThreadItem.fromJson).toList(),
       turns: _int(json['turns']),
+      latestTimestamp: _int(json['latestTimestamp']),
     );
   }
 }
@@ -376,6 +379,7 @@ class ThreadItem {
     required this.command,
     required this.output,
     required this.timestamp,
+    required this.completed,
   });
 
   final String id;
@@ -384,10 +388,12 @@ class ThreadItem {
   final String command;
   final String output;
   final int timestamp;
+  final bool completed;
 
   bool get isUser => type == 'userMessage';
   bool get isAgent => type == 'agentMessage';
   bool get isCommand => type == 'commandExecution';
+  bool get isReasoning => type == 'reasoning';
 
   factory ThreadItem.fromJson(Map<String, dynamic> json) {
     return ThreadItem(
@@ -397,8 +403,41 @@ class ThreadItem {
       command: _string(json['command']),
       output: _string(json['output']),
       timestamp: _int(json['timestamp']),
+      completed: json['completed'] == true,
     );
   }
+}
+
+List<ThreadItem> mergeThreadItems(
+  List<ThreadItem> current,
+  List<ThreadItem> incoming,
+) {
+  if (incoming.isEmpty) {
+    return current;
+  }
+  final merged = List<ThreadItem>.of(current);
+  final indexes = <String, int>{};
+  for (var index = 0; index < merged.length; index += 1) {
+    indexes[_threadItemIdentity(merged[index])] = index;
+  }
+  for (final item in incoming) {
+    final key = _threadItemIdentity(item);
+    final index = indexes[key];
+    if (index == null) {
+      indexes[key] = merged.length;
+      merged.add(item);
+    } else {
+      merged[index] = item;
+    }
+  }
+  return merged;
+}
+
+String _threadItemIdentity(ThreadItem item) {
+  if (item.id.isNotEmpty) {
+    return 'id:${item.id}';
+  }
+  return '${item.type}:${item.timestamp}:${item.command}';
 }
 
 class SendResult {

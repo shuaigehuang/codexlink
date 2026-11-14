@@ -370,7 +370,9 @@ func (s *CodexLinkService) dispatchRelayRPC(ctx context.Context, method string, 
 		return s.relayThreadList(ctx, input.Limit)
 	case "threads.read":
 		var input struct {
-			ThreadID string `json:"threadId"`
+			ThreadID         string `json:"threadId"`
+			SinceTimestamp   int64  `json:"sinceTimestamp"`
+			IncludeReasoning bool   `json:"includeReasoning"`
 		}
 		if err := json.Unmarshal(params, &input); err != nil {
 			return nil, errors.New("会话参数无效")
@@ -379,7 +381,10 @@ func (s *CodexLinkService) dispatchRelayRPC(ctx context.Context, method string, 
 		if input.ThreadID == "" {
 			return nil, errors.New("缺少会话 ID")
 		}
-		return s.ReadThread(ctx, input.ThreadID)
+		if input.IncludeReasoning {
+			return s.ReadThreadDetailed(ctx, input.ThreadID, input.SinceTimestamp)
+		}
+		return s.ReadThreadSince(ctx, input.ThreadID, input.SinceTimestamp)
 	case "threads.send":
 		var input struct {
 			ThreadID string `json:"threadId"`

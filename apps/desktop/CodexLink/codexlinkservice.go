@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -180,9 +181,10 @@ type ThreadBrief struct {
 }
 
 type ThreadDetail struct {
-	Thread ThreadBrief      `json:"thread"`
-	Items  []ThreadItemView `json:"items"`
-	Turns  int              `json:"turns"`
+	Thread          ThreadBrief      `json:"thread"`
+	Items           []ThreadItemView `json:"items"`
+	Turns           int              `json:"turns"`
+	LatestTimestamp int64            `json:"latestTimestamp,omitempty"`
 }
 
 type ThreadItemView struct {
@@ -192,6 +194,7 @@ type ThreadItemView struct {
 	Command   string `json:"command"`
 	Output    string `json:"output"`
 	Timestamp int64  `json:"timestamp"`
+	Completed bool   `json:"completed"`
 }
 
 type SendResult struct {
@@ -310,6 +313,18 @@ func (s *CodexLinkService) Dashboard(ctx context.Context) (Dashboard, error) {
 }
 
 func (s *CodexLinkService) ReadThread(ctx context.Context, threadID string) (ThreadDetail, error) {
+	return s.readThread(ctx, threadID, 0, false)
+}
+
+func (s *CodexLinkService) ReadThreadSince(ctx context.Context, threadID string, sinceTimestamp int64) (ThreadDetail, error) {
+	return s.readThread(ctx, threadID, sinceTimestamp, false)
+}
+
+func (s *CodexLinkService) ReadThreadDetailed(ctx context.Context, threadID string, sinceTimestamp int64) (ThreadDetail, error) {
+	return s.readThread(ctx, threadID, sinceTimestamp, true)
+}
+
+func (s *CodexLinkService) readThread(ctx context.Context, threadID string, sinceTimestamp int64, includeReasoning bool) (ThreadDetail, error) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 
@@ -317,40 +332,205 @@ func (s *CodexLinkService) ReadThread(ctx context.Context, threadID string) (Thr
 		return ThreadDetail{}, err
 	}
 
-	read, err := s.client.ReadThread(ctx, codex.ThreadReadParams{
-		ThreadID:     threadID,
-		IncludeTurns: false,
-	})
-	if err != nil {
-		return ThreadDetail{}, err
-	}
-
-	turns, err := s.client.ListTurns(ctx, codex.ThreadTurnsListParams{
-		ThreadID:      threadID,
-		Limit:         50,
-		SortDirection: "asc",
-		ItemsView:     "summary",
-	})
-	if err != nil {
-		return ThreadDetail{}, err
-	}
-
 	detail := ThreadDetail{
-		Thread: toThreadBrief(read.Thread),
-		Turns:  len(turns.Data),
+		Thread: ThreadBrief{ID: threadID},
 		Items:  make([]ThreadItemView, 0, 200),
 	}
+	if sinceTimestamp <= 0 {
+		read, err := s.client.ReadThread(ctx, codex.ThreadReadParams{
+			ThreadID:     threadID,
+			IncludeTurns: false,
+		})
+		if err != nil {
+			return ThreadDetail{}, err
+		}
+		detail.Thread = toThreadBrief(read.Thread)
 
-	for _, turn := range turns.Data {
+		summary, err := s.client.ListTurns(ctx, codex.ThreadTurnsListParams{
+			ThreadID:      threadID,
+			Limit:         50,
+			SortDirection: "asc",
+			ItemsView:     "summary",
+		})
+		if err != nil {
+			return ThreadDetail{}, err
+		}
+		detail.Turns = len(summary.Data)
+		detail.Items, detail.LatestTimestamp = threadTailItems(summary.Data, 0)
+
+		if !includeReasoning {
+			return detail, nil
+		}
+
+		// Summary mode omits reasoning and tool items. Add the newest turn in
+		// full so the phone can show live thinking without loading all history.
+		recent, err := s.client.ListTurns(ctx, codex.ThreadTurnsListParams{
+			ThreadID:      threadID,
+			Limit:         1,
+			SortDirection: "desc",
+			ItemsView:     "full",
+		})
+		if err == nil && len(recent.Data) > 0 {
+			extra, _ := threadTailItems(recent.Data, 0)
+			extra = limitInitialTurnItems(extra)
+			detail.Items = mergeThreadItemViews(detail.Items, extra)
+			detail.LatestTimestamp = latestItemTimestamp(detail.Items)
+		}
+		return detail, nil
+	}
+
+	limit := 12
+	itemsView := "summary"
+	if includeReasoning {
+		limit = 2
+		itemsView = "full"
+	}
+	turns, err := s.client.ListTurns(ctx, codex.ThreadTurnsListParams{
+		ThreadID:      threadID,
+		Limit:         limit,
+		SortDirection: "desc",
+		ItemsView:     itemsView,
+	})
+	if err != nil && includeReasoning {
+		// Older Codex versions may not accept "full"; keep incremental sync
+		// working with the lighter summary mode.
+		turns, err = s.client.ListTurns(ctx, codex.ThreadTurnsListParams{
+			ThreadID:      threadID,
+			Limit:         12,
+			SortDirection: "desc",
+			ItemsView:     "summary",
+		})
+	}
+	if err != nil {
+		return ThreadDetail{}, err
+	}
+	for left, right := 0, len(turns.Data)-1; left < right; left, right = left+1, right-1 {
+		turns.Data[left], turns.Data[right] = turns.Data[right], turns.Data[left]
+	}
+
+	detail.Turns = len(turns.Data)
+	detail.Items, detail.LatestTimestamp = threadTailItems(turns.Data, sinceTimestamp)
+	return detail, nil
+}
+
+func threadTailItems(turns []codex.Turn, sinceTimestamp int64) ([]ThreadItemView, int64) {
+	items := make([]ThreadItemView, 0, 200)
+	var latest int64
+	const activeOverlapMS int64 = 20000
+	for index, turn := range turns {
 		timestamp := turnTimestamp(turn)
+		// The newest turn can still be streaming even when another app-server
+		// reports it as interrupted. Incomplete items are always returned, and
+		// a short overlap catches the final update that completes an item.
+		activeTurn := turnIsActive(turn) ||
+			(index == len(turns)-1 && turn.CompletedAt == nil)
+		cutoff := sinceTimestamp
+		if activeTurn && cutoff > activeOverlapMS {
+			cutoff -= activeOverlapMS
+		}
 		for _, item := range turn.Items {
 			view, ok := toThreadItemView(item, timestamp)
-			if ok {
-				detail.Items = append(detail.Items, view)
+			if !ok {
+				continue
 			}
+			if turn.CompletedAt != nil {
+				view.Completed = true
+			}
+			if view.Timestamp > latest {
+				latest = view.Timestamp
+			}
+			if sinceTimestamp > 0 {
+				fresh := view.Timestamp > 0 && view.Timestamp >= cutoff
+				if !fresh && view.Completed {
+					continue
+				}
+			}
+			items = append(items, view)
 		}
 	}
-	return detail, nil
+	return items, latest
+}
+
+func mergeThreadItemViews(base, extra []ThreadItemView) []ThreadItemView {
+	if len(extra) == 0 {
+		return base
+	}
+	merged := make([]ThreadItemView, 0, len(base)+len(extra))
+	indexes := make(map[string]int, len(base)+len(extra))
+	for _, item := range base {
+		indexes[threadItemViewKey(item)] = len(merged)
+		merged = append(merged, item)
+	}
+	for _, item := range extra {
+		key := threadItemViewKey(item)
+		if index, ok := indexes[key]; ok {
+			merged[index] = item
+			continue
+		}
+		indexes[key] = len(merged)
+		merged = append(merged, item)
+	}
+	sort.SliceStable(merged, func(left, right int) bool {
+		return merged[left].Timestamp < merged[right].Timestamp
+	})
+	return merged
+}
+
+func threadItemViewKey(item ThreadItemView) string {
+	if item.ID != "" {
+		return "id:" + item.ID
+	}
+	return fmt.Sprintf("%s:%d:%s", item.Type, item.Timestamp, item.Command)
+}
+
+func latestItemTimestamp(items []ThreadItemView) int64 {
+	var latest int64
+	for _, item := range items {
+		if item.Timestamp > latest {
+			latest = item.Timestamp
+		}
+	}
+	return latest
+}
+
+func limitInitialTurnItems(items []ThreadItemView) []ThreadItemView {
+	const maxReasoning = 12
+	const maxCommands = 12
+	kept := make([]ThreadItemView, 0, len(items))
+	reasoning := 0
+	commands := 0
+	for index := len(items) - 1; index >= 0; index-- {
+		item := items[index]
+		switch item.Type {
+		case "reasoning":
+			if reasoning >= maxReasoning {
+				continue
+			}
+			reasoning++
+		case "commandExecution":
+			if commands >= maxCommands {
+				continue
+			}
+			commands++
+		}
+		kept = append(kept, item)
+	}
+	for left, right := 0, len(kept)-1; left < right; left, right = left+1, right-1 {
+		kept[left], kept[right] = kept[right], kept[left]
+	}
+	return kept
+}
+
+func turnIsActive(turn codex.Turn) bool {
+	if turn.CompletedAt != nil {
+		return false
+	}
+	switch strings.ToLower(strings.ReplaceAll(turn.Status, "_", "")) {
+	case "inprogress", "running", "pending", "active":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *CodexLinkService) SendMessage(ctx context.Context, threadID string, text string) (SendResult, error) {
@@ -1013,10 +1193,11 @@ func turnTimestamp(turn codex.Turn) int64 {
 
 func toThreadItemView(item codex.ThreadItem, fallbackTimestamp int64) (ThreadItemView, bool) {
 	view := ThreadItemView{
-		ID:      item.ID,
-		Type:    item.Type,
-		Command: item.Command,
-		Output:  trimText(item.AggregatedOutput, 12000),
+		ID:        item.ID,
+		Type:      item.Type,
+		Command:   item.Command,
+		Output:    trimText(item.AggregatedOutput, 12000),
+		Completed: item.CompletedAtMs != nil,
 	}
 	if item.CompletedAtMs != nil {
 		view.Timestamp = *item.CompletedAtMs
@@ -1037,6 +1218,8 @@ func toThreadItemView(item codex.ThreadItem, fallbackTimestamp int64) (ThreadIte
 		view.Text = trimText(strings.Join(parts, "\n"), 20000)
 	case "agentMessage":
 		view.Text = trimText(item.Text, 20000)
+	case "reasoning":
+		view.Text = trimText(reasoningSummaryText(item.Summary), 16000)
 	case "commandExecution":
 		view.Command = trimText(item.Command, 4000)
 	default:
@@ -1047,6 +1230,28 @@ func toThreadItemView(item codex.ThreadItem, fallbackTimestamp int64) (ThreadIte
 		return ThreadItemView{}, false
 	}
 	return view, true
+}
+
+func reasoningSummaryText(summary []any) string {
+	parts := make([]string, 0, len(summary))
+	for _, entry := range summary {
+		switch value := entry.(type) {
+		case string:
+			if text := strings.TrimSpace(value); text != "" {
+				parts = append(parts, text)
+			}
+		case map[string]any:
+			for _, key := range []string{"text", "summary_text", "summaryText"} {
+				text, ok := value[key].(string)
+				if !ok || strings.TrimSpace(text) == "" {
+					continue
+				}
+				parts = append(parts, strings.TrimSpace(text))
+				break
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func formatUnix(seconds int64) string {

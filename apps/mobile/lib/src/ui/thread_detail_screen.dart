@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../mobile_controller.dart';
@@ -20,7 +22,8 @@ class ThreadDetailScreen extends StatefulWidget {
   State<ThreadDetailScreen> createState() => _ThreadDetailScreenState();
 }
 
-class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
+class _ThreadDetailScreenState extends State<ThreadDetailScreen>
+    with WidgetsBindingObserver {
   final TextEditingController _composer = TextEditingController();
   final ScrollController _scroll = ScrollController();
   ThreadDetail? _detail;
@@ -29,20 +32,34 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
   bool _sending = false;
   bool _waitingReply = false;
   bool _showJumpToBottom = false;
+  bool _pollingLive = false;
+  bool _appActive = true;
+  int _latestTimestamp = 0;
+  Timer? _liveTimer;
+  bool _wasConnected = false;
   late bool _collapseCommands;
   final Map<String, bool> _commandExpanded = <String, bool>{};
+  final Map<String, bool> _reasoningExpanded = <String, bool>{};
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _collapseCommands = widget.controller.collapseCommands;
+    _wasConnected = widget.controller.connected;
     widget.controller.addListener(_handleControllerChange);
     _scroll.addListener(_handleScroll);
     _load(scrollToBottom: true);
+    _liveTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => unawaited(_pollLive()),
+    );
   }
 
   @override
   void dispose() {
+    _liveTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_handleControllerChange);
     _scroll.removeListener(_handleScroll);
     _composer.dispose();
@@ -50,13 +67,27 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appActive = state == AppLifecycleState.resumed;
+    if (_appActive) {
+      unawaited(_load(scrollToBottom: true));
+    }
+  }
+
   void _handleControllerChange() {
     final collapsed = widget.controller.collapseCommands;
+    final connected = widget.controller.connected;
+    final reconnected = connected && !_wasConnected;
+    _wasConnected = connected;
     if (collapsed != _collapseCommands && mounted) {
       setState(() {
         _collapseCommands = collapsed;
         _commandExpanded.clear();
       });
+    }
+    if (reconnected && mounted) {
+      unawaited(_load(scrollToBottom: true));
     }
   }
 
@@ -78,6 +109,15 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
     setState(() => _commandExpanded[key] = !_isCommandExpanded(key));
   }
 
+  bool _isReasoningExpanded(ThreadItem item) {
+    final expanded = _reasoningExpanded[item.id];
+    return expanded ?? !item.completed;
+  }
+
+  void _toggleReasoning(String key, bool current) {
+    setState(() => _reasoningExpanded[key] = !current);
+  }
+
   Future<void> _load({bool scrollToBottom = false}) async {
     if (mounted) {
       setState(() {
@@ -93,6 +133,7 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
       setState(() {
         _detail = detail;
         _error = null;
+        _latestTimestamp = _newestTimestamp(detail.items, detail.latestTimestamp);
       });
       if (scrollToBottom) {
         _scrollToBottom();
@@ -105,6 +146,50 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
       if (mounted) {
         setState(() => _loading = false);
       }
+    }
+  }
+
+  Future<void> _pollLive() async {
+    if (!mounted ||
+        !_appActive ||
+        _loading ||
+        _pollingLive ||
+        !widget.controller.connected ||
+        _detail == null) {
+      return;
+    }
+    _pollingLive = true;
+    try {
+      final update = await widget.controller.readThread(
+        widget.thread.id,
+        sinceTimestamp: _latestTimestamp,
+      );
+      if (!mounted || update.items.isEmpty) {
+        return;
+      }
+      final current = _detail!;
+      final merged = mergeThreadItems(current.items, update.items);
+      if (_sameThreadItems(current.items, merged)) {
+        return;
+      }
+      final followBottom = !_scroll.hasClients || _scroll.offset < 96;
+      final nextLatest = _newestTimestamp(update.items, _latestTimestamp);
+      setState(() {
+        _detail = ThreadDetail(
+          thread: update.thread.name.isEmpty ? current.thread : update.thread,
+          items: merged,
+          turns: update.turns > 0 ? update.turns : current.turns,
+          latestTimestamp: nextLatest,
+        );
+        _latestTimestamp = nextLatest;
+      });
+      if (followBottom) {
+        _scrollToBottom();
+      }
+    } catch (_) {
+      // Transient polling failures are retried on the next interval.
+    } finally {
+      _pollingLive = false;
     }
   }
 
@@ -164,8 +249,8 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
               : '指令已发送到当前会话，正在等待 Codex 回复',
         );
       }
-      await Future<void>.delayed(const Duration(milliseconds: 2200));
-      await _load(scrollToBottom: true);
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await _pollLive();
     } catch (exception) {
       if (mounted) {
         showMessage(context, friendlyError(exception), error: true);
@@ -237,6 +322,19 @@ class _ThreadDetailScreenState extends State<ThreadDetailScreen> {
                           }
                           final row = rows[rows.length - 1 - index];
                           if (!row.isCommand) {
+                            if (row.isReasoning) {
+                              final item = row.items.first;
+                              final reasoningKey = item.id.isEmpty
+                                  ? 'reasoning-${row.startIndex}'
+                                  : 'reasoning-${item.id}';
+                              final expanded = _isReasoningExpanded(item);
+                              return _ReasoningBlock(
+                                item: item,
+                                expanded: expanded,
+                                onToggle: () =>
+                                    _toggleReasoning(reasoningKey, expanded),
+                              );
+                            }
                             return _MessageBubble(item: row.items.first);
                           }
                           final commandKey = row.items.first.id.isEmpty
@@ -285,12 +383,18 @@ class _ThreadRow {
   final int startIndex;
 
   bool get isCommand => items.isNotEmpty && items.first.isCommand;
+  bool get isReasoning => items.isNotEmpty && items.first.isReasoning;
 }
 
 List<_ThreadRow> _buildRows(List<ThreadItem> items) {
   final rows = <_ThreadRow>[];
   var index = 0;
   while (index < items.length) {
+    if (items[index].isReasoning) {
+      rows.add(_ThreadRow(<ThreadItem>[items[index]], index));
+      index += 1;
+      continue;
+    }
     if (!items[index].isCommand) {
       rows.add(_ThreadRow(<ThreadItem>[items[index]], index));
       index += 1;
@@ -305,6 +409,130 @@ List<_ThreadRow> _buildRows(List<ThreadItem> items) {
     rows.add(_ThreadRow(group, start));
   }
   return rows;
+}
+
+int _newestTimestamp(List<ThreadItem> items, int fallback) {
+  var newest = fallback;
+  for (final item in items) {
+    if (item.timestamp > newest) {
+      newest = item.timestamp;
+    }
+  }
+  return newest;
+}
+
+bool _sameThreadItems(List<ThreadItem> current, List<ThreadItem> next) {
+  if (current.length != next.length) {
+    return false;
+  }
+  for (var index = 0; index < current.length; index += 1) {
+    final left = current[index];
+    final right = next[index];
+    if (left.id != right.id ||
+        left.type != right.type ||
+        left.text != right.text ||
+        left.command != right.command ||
+        left.output != right.output ||
+        left.timestamp != right.timestamp ||
+        left.completed != right.completed) {
+      return false;
+    }
+  }
+  return true;
+}
+
+class _ReasoningBlock extends StatelessWidget {
+  const _ReasoningBlock({
+    required this.item,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  final ThreadItem item;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF15131C),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0xFF3A3348)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(13),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.psychology_alt_rounded,
+                    size: 17,
+                    color: Color(0xFFBCA8FF),
+                  ),
+                  const SizedBox(width: 7),
+                  const Text(
+                    '思考过程',
+                    style: TextStyle(
+                      color: Color(0xFFCFC5E8),
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    item.completed ? '已完成' : '进行中',
+                    style: TextStyle(
+                      color: item.completed
+                          ? const Color(0xFF756D86)
+                          : const Color(0xFFBCA8FF),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    expanded ? '收起' : '展开',
+                    style: const TextStyle(
+                      color: Color(0xFF8D839F),
+                      fontSize: 12.5,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(
+                    expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 19,
+                    color: const Color(0xFF8D839F),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(13, 0, 13, 12),
+              child: SelectableText(
+                item.text,
+                style: const TextStyle(
+                  color: Color(0xFFBDB5CE),
+                  fontSize: 14.5,
+                  height: 1.55,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CommandBlock extends StatelessWidget {

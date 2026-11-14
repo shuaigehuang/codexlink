@@ -95,6 +95,28 @@ export function ReadThread(threadID) {
 }
 
 /**
+ * @param {string} threadID
+ * @param {number} sinceTimestamp
+ * @returns {$CancellablePromise<$models.ThreadDetail>}
+ */
+export function ReadThreadDetailed(threadID, sinceTimestamp) {
+    return $Call.ByID(820728846, threadID, sinceTimestamp).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
+ * @param {string} threadID
+ * @param {number} sinceTimestamp
+ * @returns {$CancellablePromise<$models.ThreadDetail>}
+ */
+export function ReadThreadSince(threadID, sinceTimestamp) {
+    return $Call.ByID(2162488584, threadID, sinceTimestamp).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<$models.RelayStatus>}
  */
 export function ReconnectRelay() {

@@ -150,7 +150,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 label: '授权到期',
                 value: _dateLabel(config?.expiresAt ?? ''),
               ),
-              const InfoLine(label: 'App 版本', value: '1.0.6'),
+              const InfoLine(label: 'App 版本', value: '1.0.8'),
               if (widget.controller.connectionError.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -283,7 +283,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                '手机端 1.0.6\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
+                '手机端 1.0.8\n连接你自己电脑上的 Codex 与 Magpie。中继服务器仅转发消息，不保存会话正文或完整密钥。',
                 style: TextStyle(
                   color: Color(0xFF93A1B0),
                   fontSize: 15,

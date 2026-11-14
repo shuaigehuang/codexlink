@@ -222,9 +222,16 @@ class MobileController extends ChangeNotifier {
     }
   }
 
-  Future<ThreadDetail> readThread(String threadId) async {
+  Future<ThreadDetail> readThread(
+    String threadId, {
+    int sinceTimestamp = 0,
+  }) async {
     final relay = _requireRelay();
-    final result = await relay.call('threads.read', {'threadId': threadId});
+    final result = await relay.call('threads.read', {
+      'threadId': threadId,
+      'includeReasoning': true,
+      if (sinceTimestamp > 0) 'sinceTimestamp': sinceTimestamp,
+    });
     return ThreadDetail.fromJson(result);
   }
 
